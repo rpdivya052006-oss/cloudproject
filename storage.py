@@ -1,3 +1,4 @@
+import os
 class LocalStorage:
     mode = "Local SQLite demo mode"
 
