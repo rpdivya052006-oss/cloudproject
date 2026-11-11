@@ -1,364 +1,203 @@
 
 import streamlit as st
-import pandas as pd
-import plotly.express as px
-from datetime import datetime
 
-# ---------------- PAGE CONFIG ----------------
+# PAGE CONFIGURATION
 st.set_page_config(
     page_title="FoodRescue AI",
     page_icon="🥗",
     layout="wide"
 )
 
-# ---------------- SESSION STATE ----------------
-if "food_data" not in st.session_state:
-    st.session_state.food_data = []
+# SESSION STATE
+if "foods" not in st.session_state:
+    st.session_state.foods = []
 
-# ---------------- CUSTOM DESIGN ----------------
+# CUSTOM CSS
 st.markdown("""
 <style>
 .stApp {
-    background-color: #f5f8f5;
+    background-color: #F1F8F2;
 }
 h1 {
     color: #176B45;
+    font-weight: bold;
 }
 h2, h3 {
-    color: #245C40;
+    color: #28734D;
 }
 div[data-testid="stMetric"] {
     background-color: white;
-    padding: 18px;
-    border-radius: 12px;
-    border: 1px solid #e0e8e0;
+    padding: 20px;
+    border-radius: 15px;
+    border: 1px solid #D5E8D8;
+}
+.stButton button {
+    background-color: #218653;
+    color: white;
+    border-radius: 10px;
+    border: none;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- SIDEBAR ----------------
+# SIDEBAR
 st.sidebar.title("🥗 FoodRescue AI")
-st.sidebar.caption("Smart Food Rescue Platform")
+st.sidebar.caption("Save Food • Share Hope")
 
 menu = st.sidebar.radio(
     "MAIN MENU",
-    [
-        "Dashboard",
-        "Food Prediction",
-        "Add Surplus Food",
-        "Food Donations",
-        "NGO Dashboard",
-        "Analytics",
-        "About Project"
-    ]
+    ["Home", "Food Prediction", "Food Donation"]
 )
 
-st.sidebar.divider()
-st.sidebar.success("Reducing Food Waste 🌱")
+st.sidebar.success("🌱 Reduce Food Waste")
 
-# ---------------- DASHBOARD ----------------
-if menu == "Dashboard":
+# HOME PAGE
+if menu == "Home":
 
     st.title("🥗 FoodRescue AI")
-    st.subheader("AI-Powered Food Waste Management System")
+
+    st.subheader("Save Food. Share Hope. Reduce Waste.")
 
     st.write(
-        "Predict food demand, identify surplus food "
-        "and connect food providers with NGOs."
+        "Welcome to FoodRescue AI! "
+        "A smart platform to reduce food waste "
+        "through food prediction and food donation."
     )
 
-    total_food = sum(
-        item["Quantity (kg)"]
-        for item in st.session_state.food_data
+    st.image(
+        "https://images.unsplash.com/photo-1547592180-85f173990554?w=1200",
+        use_container_width=True
     )
-
-    total_listings = len(st.session_state.food_data)
-
-    available = sum(
-        1 for item in st.session_state.food_data
-        if item["Status"] == "Available"
-    )
-
-    col1, col2, col3 = st.columns(3)
-
-    col1.metric("Food Listed", f"{total_food:.1f} kg")
-    col2.metric("Total Listings", total_listings)
-    col3.metric("Available Donations", available)
 
     st.divider()
 
-    st.subheader("Welcome to FoodRescue AI")
+    st.header("🌍 Our Mission")
 
-    st.info(
-        "Our mission is to prevent food wastage "
-        "through Artificial Intelligence and Cloud Computing."
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.info("🍲 **Save Food**\n\nPrevent food wastage.")
+
+    with col2:
+        st.success("🤖 **Predict Food**\n\nEstimate food requirements.")
+
+    with col3:
+        st.warning("🤝 **Share Food**\n\nDonate surplus food.")
+
+    st.divider()
+
+    st.header("📊 Project Overview")
+
+    total = sum(
+        food["Quantity"] for food in st.session_state.foods
     )
 
-    st.subheader("How the system works")
+    col1, col2 = st.columns(2)
 
-    c1, c2, c3 = st.columns(3)
+    col1.metric("Total Food Donated", f"{total:.1f} kg")
+    col2.metric("Total Donations", len(st.session_state.foods))
 
-    c1.write("🍲 **Food Providers**")
-    c1.caption("Add and track surplus food.")
 
-    c2.write("🤖 **AI Prediction**")
-    c2.caption("Estimate food requirements.")
-
-    c3.write("🤝 **NGO Connection**")
-    c3.caption("Connect surplus food with NGOs.")
-
-# ---------------- FOOD PREDICTION ----------------
+# FOOD PREDICTION
 elif menu == "Food Prediction":
 
-    st.title("🤖 AI Food Demand Prediction")
+    st.title("🤖 Food Requirement Prediction")
 
-    st.write(
-        "Estimate the amount of food required "
-        "based on expected attendance."
-    )
+    st.write("Calculate the estimated food quantity.")
 
     people = st.number_input(
-        "Expected number of people",
+        "Expected Number of People",
         min_value=1,
-        max_value=10000,
         value=100
     )
 
-    portion = st.number_input(
-        "Food quantity per person (kg)",
+    quantity = st.number_input(
+        "Food per Person (kg)",
         min_value=0.05,
         max_value=2.0,
         value=0.35
     )
 
-    buffer = st.slider(
-        "Additional safety buffer (%)",
-        0, 30, 10
-    )
+    if st.button("🔍 Predict Food Requirement"):
 
-    if st.button("Predict Food Requirement"):
-
-        prediction = people * portion * (1 + buffer / 100)
+        result = people * quantity
 
         st.success(
-            f"Recommended food preparation: "
-            f"{prediction:.2f} kg"
+            f"🍱 Required Food Quantity: {result:.2f} kg"
         )
 
-        st.caption(
-            "This is a baseline estimate. "
-            "A trained ML prediction model will be integrated later."
+        st.balloons()
+
+        st.info(
+            "Prepare the estimated food quantity "
+            "to help reduce food wastage."
         )
 
-# ---------------- ADD SURPLUS FOOD ----------------
-elif menu == "Add Surplus Food":
 
-    st.title("🍲 Add Surplus Food")
+# FOOD DONATION
+elif menu == "Food Donation":
 
-    with st.form("food_form"):
+    st.title("🍲 Surplus Food Donation")
+
+    st.write("Donate extra food and help people in need.")
+
+    with st.form("donation_form"):
 
         food_name = st.text_input("Food Name")
 
         quantity = st.number_input(
-            "Quantity (kg)",
+            "Food Quantity (kg)",
             min_value=0.1,
             value=1.0
         )
 
-        servings = st.number_input(
-            "Number of Servings",
-            min_value=1,
-            value=10
-        )
-
         location = st.text_input("Pickup Location")
 
-        expiry = st.date_input("Available Until")
+        description = st.text_area("Food Description")
 
-        description = st.text_area(
-            "Food Description / Allergen Information"
-        )
-
-        image = st.file_uploader(
-            "Upload Food Image",
-            type=["jpg", "jpeg", "png"]
-        )
-
-        submit = st.form_submit_button(
-            "Submit Food Donation"
-        )
+        submit = st.form_submit_button("❤️ Donate Food")
 
         if submit:
 
             if food_name.strip() and location.strip():
 
-                st.session_state.food_data.append({
-                    "Food Name": food_name,
-                    "Quantity (kg)": quantity,
-                    "Servings": servings,
+                st.session_state.foods.append({
+                    "Food": food_name,
+                    "Quantity": quantity,
                     "Location": location,
-                    "Available Until": str(expiry),
-                    "Description": description,
-                    "Status": "Available",
-                    "Image": image.getvalue() if image else None,
-                    "Date": str(datetime.now())
+                    "Description": description
                 })
 
-                st.success("Food listing added successfully!")
+                st.success("Donation Added Successfully!")
 
             else:
-                st.error("Please enter food name and location.")
+                st.error("Please enter Food Name and Location.")
 
-# ---------------- FOOD DONATIONS ----------------
-elif menu == "Food Donations":
+    st.divider()
 
-    st.title("🤝 Food Donation Marketplace")
+    st.header("🤝 Available Food Donations")
 
-    if not st.session_state.food_data:
+    if st.session_state.foods:
 
-        st.info("No food donations available yet.")
+        for food in st.session_state.foods:
 
-    for index, item in enumerate(st.session_state.food_data):
+            with st.container(border=True):
 
-        with st.container(border=True):
+                st.subheader("🍱 " + food["Food"])
 
-            st.subheader(item["Food Name"])
+                st.write(
+                    f"Quantity: {food['Quantity']} kg"
+                )
 
-            col1, col2 = st.columns(2)
+                st.write(
+                    f"📍 Location: {food['Location']}"
+                )
 
-            col1.write(
-                f"**Quantity:** {item['Quantity (kg)']} kg"
-            )
-
-            col2.write(
-                f"**Servings:** {item['Servings']}"
-            )
-
-            st.write(
-                f"📍 Location: {item['Location']}"
-            )
-
-            st.write(
-                f"📅 Available until: {item['Available Until']}"
-            )
-
-            st.write(
-                f"Status: {item['Status']}"
-            )
-
-            if item["Image"]:
-                st.image(item["Image"], width=250)
-
-            if item["Description"]:
-                st.caption(item["Description"])
-
-            if item["Status"] == "Available":
-
-                if st.button(
-                    "Accept Donation",
-                    key=f"accept_{index}"
-                ):
-
-                    st.session_state.food_data[index]["Status"] = "Accepted"
-
-                    st.success("Donation accepted!")
-
-                    st.rerun()
-
-# ---------------- NGO DASHBOARD ----------------
-elif menu == "NGO Dashboard":
-
-    st.title("🏥 NGO Dashboard")
-
-    accepted = [
-        item for item in st.session_state.food_data
-        if item["Status"] == "Accepted"
-    ]
-
-    st.metric("Accepted Donations", len(accepted))
-
-    if accepted:
-
-        for item in accepted:
-
-            st.write(
-                f"🍱 {item['Food Name']} - "
-                f"{item['Quantity (kg)']} kg"
-            )
-
-    else:
-        st.info("No donations have been accepted yet.")
-
-# ---------------- ANALYTICS ----------------
-elif menu == "Analytics":
-
-    st.title("📊 Food Waste Analytics")
-
-    if st.session_state.food_data:
-
-        df = pd.DataFrame(
-            st.session_state.food_data
-        )
-
-        st.subheader("Food Listing Details")
-
-        st.dataframe(
-            df.drop(columns=["Image"]),
-            use_container_width=True
-        )
-
-        chart = px.bar(
-            df,
-            x="Food Name",
-            y="Quantity (kg)",
-            color="Status",
-            title="Food Quantity Overview"
-        )
-
-        st.plotly_chart(
-            chart,
-            use_container_width=True
-        )
-
-        total = df["Quantity (kg)"].sum()
-
-        st.metric(
-            "Total Food Listed",
-            f"{total:.2f} kg"
-        )
+                st.write(
+                    f"Description: {food['Description']}"
+                )
 
     else:
 
-        st.info("Add food listings to view analytics.")
+        st.info("No donations available yet.")
 
-# ---------------- ABOUT PROJECT ----------------
-elif menu == "About Project":
-
-    st.title("About FoodRescue AI")
-
-    st.write("""
-    FoodRescue AI is an intelligent food waste
-    prediction and redistribution platform.
-
-    **Technologies:**
-
-    - Python
-    - Streamlit
-    - Artificial Intelligence
-    - Machine Learning
-    - AWS Cloud Computing
-
-    **AWS Integration Planned:**
-
-    - Amazon EC2 – Application hosting
-    - Amazon RDS – Database
-    - Amazon S3 – Food image storage
-    - Amazon SNS – Donation notifications
-
-    **Objective:**
-
-    Reduce food waste and connect surplus food
-    with people who need it.
-    """)
-
-    st.success("Save Food. Share Hope. Reduce Waste. 🌱")
