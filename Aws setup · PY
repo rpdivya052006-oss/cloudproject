@@ -1,0 +1,49 @@
+"""One-time AWS provisioning: 3 DynamoDB tables + a PRIVATE, encrypted S3 bucket.
+Usage:  python aws_setup.py            (create resources)
+        python aws_setup.py --seed     (also load sample data)
+Credentials come from `aws configure` / AWS_PROFILE / IAM role – never from this code."""
+import json, os, sys
+
+import boto3
+from botocore.exceptions import ClientError
+from dotenv import load_dotenv
+
+load_dotenv()
+from storage import DEFAULT_TABLES, KEYS, get_store, seed_sample, table_name  # noqa: E402
+
+region, bucket = os.getenv("AWS_REGION", "ap-south-1"), os.environ["S3_BUCKET_NAME"]
+session = boto3.session.Session(region_name=region)
+ddb, s3 = session.client("dynamodb"), session.client("s3")
+
+for t in KEYS:
+    try:
+        ddb.create_table(TableName=table_name(t), BillingMode="PAY_PER_REQUEST",
+                         AttributeDefinitions=[{"AttributeName": KEYS[t], "AttributeType": "S"}],
+                         KeySchema=[{"AttributeName": KEYS[t], "KeyType": "HASH"}])
+        ddb.get_waiter("table_exists").wait(TableName=table_name(t))
+        print("✔ created table", table_name(t))
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ResourceInUseException": raise
+        print("• table exists:", table_name(t))
+
+try:
+    s3.create_bucket(Bucket=bucket, **({} if region == "us-east-1" else {"CreateBucketConfiguration": {"LocationConstraint": region}}))
+    print("✔ created bucket", bucket)
+except ClientError as e:
+    if e.response["Error"]["Code"] not in ("BucketAlreadyOwnedByYou",): raise
+    print("• bucket exists:", bucket)
+
+s3.put_public_access_block(Bucket=bucket, PublicAccessBlockConfiguration={
+    "BlockPublicAcls": True, "IgnorePublicAcls": True, "BlockPublicPolicy": True, "RestrictPublicBuckets": True})
+s3.put_bucket_encryption(Bucket=bucket, ServerSideEncryptionConfiguration={
+    "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]})
+s3.put_bucket_policy(Bucket=bucket, Policy=json.dumps({"Version": "2012-10-17", "Statement": [{
+    "Sid": "DenyInsecureTransport", "Effect": "Deny", "Principal": "*", "Action": "s3:*",
+    "Resource": [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/*"],
+    "Condition": {"Bool": {"aws:SecureTransport": "false"}}}]}))
+print("✔ bucket is private, encrypted, HTTPS-only")
+
+if "--seed" in sys.argv:
+    os.environ["USE_AWS"] = "true"
+    store, warn = get_store()
+    print(warn or "seeding…"); seed_sample(store); print("✔ sample data loaded into", store.mode)
