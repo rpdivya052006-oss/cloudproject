@@ -17,6 +17,9 @@ TIME_LIMIT = 20  # seconds per question (used for the speed bonus)
 @st.cache_resource
 def get_db():
     info = dict(st.secrets["firebase"])
+    # clean the private key: strip stray quotes/spaces and convert literal "\n" to real newlines
+    key = str(info["private_key"]).strip().strip('"').replace("\\n", "\n").strip()
+    info["private_key"] = key + "\n"
     creds = service_account.Credentials.from_service_account_info(info)
     return firestore.Client(credentials=creds, project=info["project_id"])
 
