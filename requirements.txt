@@ -1,7 +1,2 @@
-streamlit>=1.35
-google-cloud-firestore
-opencv-python-headless
-numpy
-pandas
-pypdf
-anthropic
+streamlit
+supabase
