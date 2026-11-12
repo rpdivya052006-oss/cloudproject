@@ -1,147 +1,176 @@
 
+
 import streamlit as st
 import sqlite3
 import hashlib
-import os
+import secrets
 import pandas as pd
 from datetime import datetime
 
-# ---------------- PAGE CONFIG ----------------
+# ---------------- CONFIG ----------------
+
 st.set_page_config(
-    page_title="Online Quiz Portal",
+    page_title="Online Quiz System",
     page_icon="📝",
     layout="wide"
 )
 
-DB = "quiz.db"
+DB = "quiz_system.db"
 
 # ---------------- DATABASE ----------------
-def connect():
-    return sqlite3.connect(DB)
 
-def hash_password(password, salt=None):
-    if salt is None:
-        salt = os.urandom(16)
+def connect():
+    conn = sqlite3.connect(DB)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def create_tables():
+    with connect() as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            role TEXT NOT NULL
+        )
+        """)
+
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS quizzes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            description TEXT,
+            active INTEGER DEFAULT 0,
+            created_at TEXT
+        )
+        """)
+
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            quiz_id INTEGER,
+            question TEXT,
+            option1 TEXT,
+            option2 TEXT,
+            option3 TEXT,
+            option4 TEXT,
+            answer INTEGER
+        )
+        """)
+
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            quiz_id INTEGER,
+            score INTEGER,
+            total INTEGER,
+            percentage REAL,
+            submitted_at TEXT
+        )
+        """)
+
+        # Add default admin if not already present
+        admin = conn.execute(
+            "SELECT id FROM users WHERE email=?",
+            ("admin@quiz.com",)
+        ).fetchone()
+
+        if not admin:
+            conn.execute("""
+            INSERT INTO users(full_name,email,password,role)
+            VALUES(?,?,?,?)
+            """, (
+                "Administrator",
+                "admin@quiz.com",
+                hash_password("admin123"),
+                "admin"
+            ))
+
+
+# ---------------- PASSWORD ----------------
+
+def hash_password(password):
+    salt = secrets.token_bytes(16)
     hashed = hashlib.pbkdf2_hmac(
-        "sha256", password.encode(), salt, 200000
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        100000
     )
     return salt.hex() + ":" + hashed.hex()
 
-def verify_password(password, stored):
+
+def verify_password(password, stored_password):
     try:
-        salt, old_hash = stored.split(":")
-        return hash_password(password, bytes.fromhex(salt)).split(":")[1] == old_hash
+        salt_hex, hash_hex = stored_password.split(":")
+        salt = bytes.fromhex(salt_hex)
+
+        new_hash = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt,
+            100000
+        )
+
+        return secrets.compare_digest(
+            new_hash.hex(),
+            hash_hex
+        )
     except Exception:
         return False
 
-def setup_database():
-    conn = connect()
-    cur = conn.cursor()
 
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS users(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        full_name TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        role TEXT DEFAULT 'student'
-    )
-    """)
+# ---------------- USER FUNCTIONS ----------------
 
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS quizzes(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        description TEXT,
-        active INTEGER DEFAULT 0,
-        created_at TEXT
-    )
-    """)
+def register_user(name, email, password):
+    try:
+        with connect() as conn:
+            conn.execute("""
+            INSERT INTO users(full_name,email,password,role)
+            VALUES(?,?,?,?)
+            """, (
+                name.strip(),
+                email.strip().lower(),
+                hash_password(password),
+                "student"
+            ))
+        return True
+    except sqlite3.IntegrityError:
+        return False
 
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS questions(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        quiz_id INTEGER,
-        question TEXT NOT NULL,
-        option_a TEXT NOT NULL,
-        option_b TEXT NOT NULL,
-        option_c TEXT NOT NULL,
-        option_d TEXT NOT NULL,
-        answer TEXT NOT NULL,
-        FOREIGN KEY(quiz_id) REFERENCES quizzes(id)
-    )
-    """)
 
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS results(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        quiz_id INTEGER,
-        score INTEGER,
-        total INTEGER,
-        percentage REAL,
-        submitted_at TEXT
-    )
-    """)
+def login_user(email, password, role):
+    with connect() as conn:
+        user = conn.execute("""
+        SELECT * FROM users
+        WHERE email=? AND role=?
+        """, (email.strip().lower(), role)).fetchone()
 
-    # Create default admin
-    admin = cur.execute(
-        "SELECT id FROM users WHERE email=?",
-        ("admin@quiz.com",)
-    ).fetchone()
+    if user and verify_password(password, user["password"]):
+        return dict(user)
 
-    if not admin:
-        cur.execute("""
-        INSERT INTO users(full_name,email,password,role)
-        VALUES(?,?,?,?)
-        """, (
-            "Administrator",
-            "admin@quiz.com",
-            hash_password("admin123"),
-            "admin"
-        ))
+    return None
 
-    conn.commit()
-    conn.close()
-
-setup_database()
 
 # ---------------- SESSION ----------------
+
 if "user" not in st.session_state:
     st.session_state.user = None
-
-if "role" not in st.session_state:
-    st.session_state.role = None
 
 if "quiz_attempt" not in st.session_state:
     st.session_state.quiz_attempt = None
 
-# ---------------- COMMON ----------------
-def logout():
-    st.session_state.user = None
-    st.session_state.role = None
-    st.session_state.quiz_attempt = None
-    st.rerun()
-
-def get_quizzes(active_only=False):
-    conn = connect()
-    if active_only:
-        data = conn.execute(
-            "SELECT * FROM quizzes WHERE active=1 ORDER BY id DESC"
-        ).fetchall()
-    else:
-        data = conn.execute(
-            "SELECT * FROM quizzes ORDER BY id DESC"
-        ).fetchall()
-    conn.close()
-    return data
+create_tables()
 
 # ---------------- LOGIN PAGE ----------------
-if st.session_state.user is None:
 
-    st.title("📝 Online Examination Portal")
+def login_page():
+
+    st.title("📝 Online Quiz System")
     st.write("Welcome! Login or register to continue.")
-    st.divider()
 
     login_tab, register_tab, admin_tab = st.tabs([
         "Student Login",
@@ -149,591 +178,470 @@ if st.session_state.user is None:
         "Admin Login"
     ])
 
-    # STUDENT LOGIN
     with login_tab:
         st.subheader("Student Login")
 
-        email = st.text_input("Email Address", key="login_email")
+        email = st.text_input(
+            "Email",
+            key="student_email"
+        )
+
         password = st.text_input(
-            "Password", type="password", key="login_password"
+            "Password",
+            type="password",
+            key="student_password"
         )
 
         if st.button("Login", key="student_login"):
-            conn = connect()
-            user = conn.execute(
-                "SELECT * FROM users WHERE email=? AND role='student'",
-                (email.strip().lower(),)
-            ).fetchone()
-            conn.close()
-
-            if user and verify_password(password, user[3]):
-                st.session_state.user = user[0]
-                st.session_state.role = "student"
-                st.success("Login successful!")
-                st.rerun()
+            if not email or not password:
+                st.warning("Enter email and password.")
             else:
-                st.error("Invalid email or password.")
+                user = login_user(email, password, "student")
 
-    # STUDENT REGISTRATION
+                if user:
+                    st.session_state.user = user
+                    st.success("Login successful!")
+                    st.rerun()
+                else:
+                    st.error("Invalid email or password.")
+
     with register_tab:
         st.subheader("Create Student Account")
 
-        full_name = st.text_input("Full Name", key="reg_name")
-        reg_email = st.text_input("Email Address", key="reg_email")
-        reg_password = st.text_input(
-            "Create Password", type="password", key="reg_password"
+        name = st.text_input("Full Name", key="reg_name")
+        email = st.text_input("Email Address", key="reg_email")
+        password = st.text_input(
+            "Create Password",
+            type="password",
+            key="reg_password"
         )
-        confirm_password = st.text_input(
-            "Confirm Password", type="password", key="confirm_password"
+        confirm = st.text_input(
+            "Confirm Password",
+            type="password",
+            key="reg_confirm"
         )
 
-        if st.button("Register", key="register"):
-            if not full_name.strip() or not reg_email.strip() or not reg_password:
+        if st.button("Register", key="register_button"):
+            if not name.strip() or not email.strip() or not password:
                 st.warning("Please fill all fields.")
-            elif "@" not in reg_email or "." not in reg_email:
+            elif "@" not in email or "." not in email:
                 st.warning("Enter a valid email address.")
-            elif len(reg_password) < 6:
-                st.warning("Password must have at least 6 characters.")
-            elif reg_password != confirm_password:
+            elif len(password) < 6:
+                st.warning("Password must contain at least 6 characters.")
+            elif password != confirm:
                 st.error("Passwords do not match.")
+            elif register_user(name, email, password):
+                st.success("Registration successful! Now login.")
             else:
-                try:
-                    conn = connect()
-                    conn.execute("""
-                    INSERT INTO users(full_name,email,password,role)
-                    VALUES(?,?,?,'student')
-                    """, (
-                        full_name.strip(),
-                        reg_email.strip().lower(),
-                        hash_password(reg_password)
-                    ))
-                    conn.commit()
-                    conn.close()
-                    st.success("Registration successful! Now login.")
-                except sqlite3.IntegrityError:
-                    st.error("This email is already registered.")
+                st.error("This email is already registered.")
 
-    # ADMIN LOGIN
     with admin_tab:
-        st.subheader("Administrator Login")
+        st.subheader("Admin Login")
 
-        admin_email = st.text_input(
-            "Admin Email", key="admin_email"
-        )
-        admin_password = st.text_input(
-            "Admin Password", type="password", key="admin_password"
+        email = st.text_input("Admin Email", key="admin_email")
+        password = st.text_input(
+            "Admin Password",
+            type="password",
+            key="admin_password"
         )
 
         if st.button("Admin Login"):
-            conn = connect()
-            admin = conn.execute(
-                "SELECT * FROM users WHERE email=? AND role='admin'",
-                (admin_email.strip().lower(),)
-            ).fetchone()
-            conn.close()
+            user = login_user(email, password, "admin")
 
-            if admin and verify_password(admin_password, admin[3]):
-                st.session_state.user = admin[0]
-                st.session_state.role = "admin"
+            if user:
+                st.session_state.user = user
                 st.success("Admin login successful!")
                 st.rerun()
             else:
                 st.error("Invalid admin credentials.")
 
-    st.stop()
 
-# ---------------- USER DETAILS ----------------
-conn = connect()
-current_user = conn.execute(
-    "SELECT * FROM users WHERE id=?",
-    (st.session_state.user,)
-).fetchone()
-conn.close()
+# ---------------- STUDENT DASHBOARD ----------------
 
-if not current_user:
-    logout()
+def student_dashboard():
 
-st.sidebar.title("📝 Quiz Portal")
-st.sidebar.write(f"Welcome, {current_user[1]}")
-st.sidebar.caption(current_user[4].upper())
+    user = st.session_state.user
 
-if st.sidebar.button("Logout"):
-    logout()
+    st.title("🎓 Student Dashboard")
+    st.write("Welcome,", user["full_name"])
 
-# =================================================
-#                 STUDENT DASHBOARD
-# =================================================
-if st.session_state.role == "student":
+    if st.button("Logout"):
+        st.session_state.user = None
+        st.session_state.quiz_attempt = None
+        st.rerun()
 
-    menu = st.sidebar.radio(
-        "Student Menu",
-        ["Dashboard", "Available Quizzes", "My Scores", "My Profile"]
-    )
+    tab1, tab2, tab3 = st.tabs([
+        "Available Quizzes",
+        "My Scores",
+        "My Profile"
+    ])
 
-    if menu == "Dashboard":
-
-        st.title("🎓 Student Dashboard")
-        st.write(f"Hello, {current_user[1]}!")
-
-        conn = connect()
-
-        total_attempts = conn.execute(
-            "SELECT COUNT(*) FROM results WHERE user_id=?",
-            (current_user[0],)
-        ).fetchone()[0]
-
-        avg_score = conn.execute(
-            "SELECT AVG(percentage) FROM results WHERE user_id=?",
-            (current_user[0],)
-        ).fetchone()[0]
-
-        best_score = conn.execute(
-            "SELECT MAX(percentage) FROM results WHERE user_id=?",
-            (current_user[0],)
-        ).fetchone()[0]
-
-        available = conn.execute(
-            "SELECT COUNT(*) FROM quizzes WHERE active=1"
-        ).fetchone()[0]
-
-        conn.close()
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Quiz Attempts", total_attempts)
-        c2.metric("Average Score", f"{avg_score or 0:.1f}%")
-        c3.metric("Best Score", f"{best_score or 0:.1f}%")
-
-        st.divider()
+    with tab1:
         st.subheader("Available Quizzes")
-        st.info(f"You have {available} published quizzes available.")
 
-    # AVAILABLE QUIZZES
-    elif menu == "Available Quizzes":
-
-        st.title("📚 Available Quizzes")
-
-        quizzes = get_quizzes(active_only=True)
+        with connect() as conn:
+            quizzes = conn.execute("""
+            SELECT * FROM quizzes WHERE active=1
+            ORDER BY id DESC
+            """).fetchall()
 
         if not quizzes:
-            st.info("No quizzes are published yet.")
+            st.info("No quizzes are available currently.")
 
         for quiz in quizzes:
+            with st.container(border=True):
+                st.subheader(quiz["title"])
+                st.write(quiz["description"])
 
-            conn = connect()
-            count = conn.execute(
-                "SELECT COUNT(*) FROM questions WHERE quiz_id=?",
-                (quiz[0],)
-            ).fetchone()[0]
-            conn.close()
-
-            with st.expander(quiz[1]):
-
-                st.write(quiz[2])
-                st.write(f"Total Questions: {count}")
-
-                if count == 0:
-                    st.warning("Questions are not available.")
-                elif st.button(
+                if st.button(
                     "Start Quiz",
-                    key=f"start_{quiz[0]}"
+                    key=f"start_{quiz['id']}"
                 ):
-                    st.session_state.quiz_attempt = quiz[0]
+                    st.session_state.quiz_attempt = quiz["id"]
                     st.rerun()
 
-        # QUIZ ATTEMPT
-        quiz_id = st.session_state.quiz_attempt
+    with tab2:
+        st.subheader("My Quiz Results")
 
-        if quiz_id:
-
-            st.divider()
-            st.subheader("✍️ Attend Examination")
-
-            conn = connect()
-            questions = conn.execute(
-                "SELECT * FROM questions WHERE quiz_id=?",
-                (quiz_id,)
-            ).fetchall()
-            conn.close()
-
-            if not questions:
-                st.warning("No questions available.")
-                st.session_state.quiz_attempt = None
-            else:
-
-                with st.form("student_quiz_form"):
-
-                    answers = []
-
-                    for i, q in enumerate(questions):
-                        st.markdown(f"### Q{i+1}. {q[2]}")
-
-                        selected = st.radio(
-                            "Select your answer",
-                            [q[3], q[4], q[5], q[6]],
-                            key=f"student_answer_{q[0]}"
-                        )
-
-                        answers.append(selected)
-
-                    submitted = st.form_submit_button(
-                        "Submit Examination"
-                    )
-
-                if submitted:
-
-                    score = sum(
-                        1 for q, answer in zip(questions, answers)
-                        if answer == q[7]
-                    )
-
-                    total = len(questions)
-                    percentage = score / total * 100
-
-                    conn = connect()
-                    conn.execute("""
-                    INSERT INTO results(
-                        user_id,quiz_id,score,total,percentage,submitted_at
-                    ) VALUES(?,?,?,?,?,?)
-                    """, (
-                        current_user[0],
-                        quiz_id,
-                        score,
-                        total,
-                        percentage,
-                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    ))
-                    conn.commit()
-                    conn.close()
-
-                    st.session_state.last_result = (
-                        score, total, percentage
-                    )
-                    st.session_state.quiz_attempt = None
-                    st.success("Examination submitted successfully!")
-                    st.rerun()
-
-    # STUDENT RESULTS
-    elif menu == "My Scores":
-
-        st.title("🏆 My Scores")
-
-        conn = connect()
-        results = conn.execute("""
-        SELECT quizzes.title, results.score, results.total,
-        results.percentage, results.submitted_at
-        FROM results
-        JOIN quizzes ON results.quiz_id=quizzes.id
-        WHERE results.user_id=?
-        ORDER BY results.id DESC
-        """, (current_user[0],)).fetchall()
-        conn.close()
+        with connect() as conn:
+            results = conn.execute("""
+            SELECT q.title, r.score, r.total,
+                   r.percentage, r.submitted_at
+            FROM results r
+            JOIN quizzes q ON q.id=r.quiz_id
+            WHERE r.user_id=?
+            ORDER BY r.id DESC
+            """, (user["id"],)).fetchall()
 
         if results:
-            df = pd.DataFrame(results, columns=[
-                "Quiz", "Score", "Total Questions",
-                "Percentage", "Date"
-            ])
-            st.dataframe(df, use_container_width=True)
-
-            for r in results:
-                st.write(f"**{r[0]}**")
-                st.progress(min(r[3] / 100, 1.0))
-                st.write(f"Score: {r[1]}/{r[2]} | {r[3]:.2f}%")
-                st.divider()
+            st.dataframe(
+                pd.DataFrame([dict(r) for r in results]),
+                use_container_width=True
+            )
         else:
-            st.info("You have not attempted any quiz yet.")
+            st.info("You have not completed any quizzes.")
 
-    # PROFILE
-    elif menu == "My Profile":
+    with tab3:
+        st.subheader("Student Profile")
+        st.write("Name:", user["full_name"])
+        st.write("Email:", user["email"])
+        st.write("Role:", user["role"])
 
-        st.title("👤 My Profile")
-        st.write("Full Name:", current_user[1])
-        st.write("Email:", current_user[2])
-        st.write("Account Type: Student")
 
-# =================================================
-#                  ADMIN DASHBOARD
-# =================================================
-elif st.session_state.role == "admin":
+# ---------------- QUIZ ATTEMPT ----------------
 
-    menu = st.sidebar.radio(
-        "Admin Menu",
-        [
-            "Dashboard",
-            "Create Quiz",
-            "Add Questions",
-            "Manage Quizzes",
-            "Student Results",
-            "Student Details"
+def take_quiz():
+
+    user = st.session_state.user
+    quiz_id = st.session_state.quiz_attempt
+
+    with connect() as conn:
+        quiz = conn.execute(
+            "SELECT * FROM quizzes WHERE id=? AND active=1",
+            (quiz_id,)
+        ).fetchone()
+
+        questions = conn.execute(
+            "SELECT * FROM questions WHERE quiz_id=?",
+            (quiz_id,)
+        ).fetchall()
+
+    if not quiz or not questions:
+        st.error("Quiz is unavailable.")
+        if st.button("Back to Dashboard"):
+            st.session_state.quiz_attempt = None
+            st.rerun()
+        return
+
+    st.title("📝 " + quiz["title"])
+    st.write(quiz["description"])
+    st.write("Total Questions:", len(questions))
+
+    answers = []
+
+    for i, q in enumerate(questions):
+        st.markdown(f"### Q{i+1}. {q['question']}")
+
+        options = [
+            q["option1"],
+            q["option2"],
+            q["option3"],
+            q["option4"]
         ]
-    )
 
-    # ADMIN DASHBOARD
-    if menu == "Dashboard":
+        selected = st.radio(
+            "Select your answer",
+            options,
+            key=f"question_{q['id']}",
+            index=None
+        )
 
-        st.title("⚙️ Admin Dashboard")
-        st.write("Manage your online examination system.")
+        answers.append((q, selected))
 
-        conn = connect()
+    if st.button("Submit Quiz"):
+        if any(selected is None for q, selected in answers):
+            st.warning("Please answer all questions before submitting.")
+            return
 
-        students = conn.execute(
-            "SELECT COUNT(*) FROM users WHERE role='student'"
-        ).fetchone()[0]
+        score = 0
 
-        quizzes = conn.execute(
-            "SELECT COUNT(*) FROM quizzes"
-        ).fetchone()[0]
+        for q, selected in answers:
+            correct = q["answer"]
+            options = [
+                q["option1"],
+                q["option2"],
+                q["option3"],
+                q["option4"]
+            ]
 
-        attempts = conn.execute(
-            "SELECT COUNT(*) FROM results"
-        ).fetchone()[0]
+            if selected == options[correct - 1]:
+                score += 1
 
-        conn.close()
+        total = len(questions)
+        percentage = (score / total) * 100
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total Students", students)
-        c2.metric("Total Quizzes", quizzes)
-        c3.metric("Total Attempts", attempts)
+        with connect() as conn:
+            conn.execute("""
+            INSERT INTO results
+            (user_id,quiz_id,score,total,percentage,submitted_at)
+            VALUES(?,?,?,?,?,?)
+            """, (
+                user["id"],
+                quiz_id,
+                score,
+                total,
+                percentage,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            ))
 
-        st.divider()
-        st.info("Use the Admin Menu to create quizzes and manage questions.")
+        st.session_state.quiz_attempt = None
+        st.session_state.last_result = {
+            "score": score,
+            "total": total,
+            "percentage": percentage
+        }
+        st.rerun()
 
-    # CREATE QUIZ
-    elif menu == "Create Quiz":
 
-        st.title("➕ Create New Quiz")
+# ---------------- ADMIN DASHBOARD ----------------
 
-        with st.form("create_quiz_form"):
+def admin_dashboard():
 
-            title = st.text_input("Quiz Title")
-            description = st.text_area("Quiz Description")
+    st.title("⚙️ Admin Dashboard")
+    st.write("Welcome Administrator!")
 
-            create = st.form_submit_button("Create Quiz")
+    if st.button("Logout"):
+        st.session_state.user = None
+        st.rerun()
 
-        if create:
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Dashboard",
+        "Create Quiz",
+        "Add Questions",
+        "Manage Quizzes",
+        "Student Results"
+    ])
 
-            if title.strip():
+    with tab1:
+        with connect() as conn:
+            students = conn.execute(
+                "SELECT COUNT(*) FROM users WHERE role='student'"
+            ).fetchone()[0]
 
-                conn = connect()
-                conn.execute("""
-                INSERT INTO quizzes(title,description,active,created_at)
-                VALUES(?,?,0,?)
-                """, (
-                    title.strip(),
-                    description.strip(),
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                ))
-                conn.commit()
-                conn.close()
+            quizzes = conn.execute(
+                "SELECT COUNT(*) FROM quizzes"
+            ).fetchone()[0]
 
-                st.success("Quiz created successfully! Add questions next.")
+            questions = conn.execute(
+                "SELECT COUNT(*) FROM questions"
+            ).fetchone()[0]
 
+            attempts = conn.execute(
+                "SELECT COUNT(*) FROM results"
+            ).fetchone()[0]
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Students", students)
+        c2.metric("Quizzes", quizzes)
+        c3.metric("Questions", questions)
+        c4.metric("Attempts", attempts)
+
+    with tab2:
+        st.subheader("Create New Quiz")
+
+        title = st.text_input("Quiz Title")
+        description = st.text_area("Quiz Description")
+
+        if st.button("Create Quiz"):
+            if not title.strip():
+                st.warning("Enter quiz title.")
             else:
-                st.warning("Enter a quiz title.")
+                with connect() as conn:
+                    conn.execute("""
+                    INSERT INTO quizzes(title,description,active,created_at)
+                    VALUES(?,?,0,?)
+                    """, (
+                        title.strip(),
+                        description,
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    ))
 
-    # ADD QUESTIONS
-    elif menu == "Add Questions":
+                st.success("Quiz created successfully!")
 
-        st.title("📝 Add Quiz Questions")
+    with tab3:
+        st.subheader("Add Questions")
 
-        quizzes = get_quizzes()
+        with connect() as conn:
+            quizzes = conn.execute(
+                "SELECT * FROM quizzes ORDER BY id DESC"
+            ).fetchall()
 
         if quizzes:
-
-            quiz_options = {
-                f"{q[1]} (ID: {q[0]})": q[0]
+            quiz_map = {
+                f"{q['title']} (ID: {q['id']})": q["id"]
                 for q in quizzes
             }
 
             selected_quiz = st.selectbox(
                 "Select Quiz",
-                list(quiz_options.keys())
+                list(quiz_map.keys())
             )
 
-            quiz_id = quiz_options[selected_quiz]
+            quiz_id = quiz_map[selected_quiz]
 
-            with st.form("add_question_form"):
+            question = st.text_area("Enter Question")
 
-                question = st.text_area("Enter Question")
+            options = [
+                st.text_input("Option 1"),
+                st.text_input("Option 2"),
+                st.text_input("Option 3"),
+                st.text_input("Option 4")
+            ]
 
-                a = st.text_input("Option A")
-                b = st.text_input("Option B")
-                c = st.text_input("Option C")
-                d = st.text_input("Option D")
+            correct = st.selectbox(
+                "Correct Answer",
+                [1, 2, 3, 4]
+            )
 
-                answer = st.selectbox(
-                    "Select Correct Answer",
-                    ["A", "B", "C", "D"]
-                )
-
-                add = st.form_submit_button("Add Question")
-
-            if add:
-
-                if all(x.strip() for x in [question, a, b, c, d]):
-
-                    correct = {
-                        "A": a, "B": b, "C": c, "D": d
-                    }[answer]
-
-                    conn = connect()
-                    conn.execute("""
-                    INSERT INTO questions(
-                        quiz_id,question,option_a,option_b,
-                        option_c,option_d,answer
-                    ) VALUES(?,?,?,?,?,?,?)
-                    """, (
-                        quiz_id, question.strip(),
-                        a.strip(), b.strip(), c.strip(), d.strip(),
-                        correct
-                    ))
-                    conn.commit()
-                    conn.close()
+            if st.button("Add Question"):
+                if not question.strip() or any(
+                    not option.strip() for option in options
+                ):
+                    st.warning("Fill the question and all four options.")
+                else:
+                    with connect() as conn:
+                        conn.execute("""
+                        INSERT INTO questions
+                        (quiz_id,question,option1,option2,option3,option4,answer)
+                        VALUES(?,?,?,?,?,?,?)
+                        """, (
+                            quiz_id,
+                            question.strip(),
+                            *options,
+                            correct
+                        ))
 
                     st.success("Question added successfully!")
-
-                else:
-                    st.warning("Fill all question and option fields.")
-
-            conn = connect()
-            count = conn.execute(
-                "SELECT COUNT(*) FROM questions WHERE quiz_id=?",
-                (quiz_id,)
-            ).fetchone()[0]
-            conn.close()
-
-            st.info(f"Questions added to this quiz: {count}")
-
         else:
-            st.warning("First create a quiz.")
+            st.info("Create a quiz first.")
 
-    # MANAGE QUIZZES
-    elif menu == "Manage Quizzes":
+    with tab4:
+        st.subheader("Manage Quizzes")
 
-        st.title("⚙️ Manage Quizzes")
-
-        quizzes = get_quizzes()
+        with connect() as conn:
+            quizzes = conn.execute(
+                "SELECT * FROM quizzes ORDER BY id DESC"
+            ).fetchall()
 
         for q in quizzes:
-
-            with st.expander(q[1]):
-
-                st.write(q[2])
-
+            with st.container(border=True):
+                st.write("**" + q["title"] + "**")
+                st.write(q["description"])
                 st.write(
                     "Status:",
-                    "Published" if q[3] == 1 else "Draft"
+                    "Published" if q["active"] else "Unpublished"
                 )
 
-                new_status = st.checkbox(
-                    "Publish this quiz",
-                    value=bool(q[3]),
-                    key=f"publish_{q[0]}"
-                )
+                col1, col2 = st.columns(2)
 
-                if st.button(
-                    "Update Status",
-                    key=f"update_{q[0]}"
-                ):
+                with col1:
+                    if q["active"]:
+                        if st.button(
+                            "Unpublish",
+                            key=f"unpublish_{q['id']}"
+                        ):
+                            with connect() as conn:
+                                conn.execute(
+                                    "UPDATE quizzes SET active=0 WHERE id=?",
+                                    (q["id"],)
+                                )
+                            st.rerun()
+                    else:
+                        if st.button(
+                            "Publish",
+                            key=f"publish_{q['id']}"
+                        ):
+                            with connect() as conn:
+                                conn.execute(
+                                    "UPDATE quizzes SET active=1 WHERE id=?",
+                                    (q["id"],)
+                                )
+                            st.rerun()
 
-                    conn = connect()
-                    conn.execute(
-                        "UPDATE quizzes SET active=? WHERE id=?",
-                        (int(new_status), q[0])
-                    )
-                    conn.commit()
-                    conn.close()
+                with col2:
+                    if st.button(
+                        "Delete",
+                        key=f"delete_{q['id']}"
+                    ):
+                        with connect() as conn:
+                            conn.execute(
+                                "DELETE FROM results WHERE quiz_id=?",
+                                (q["id"],)
+                            )
+                            conn.execute(
+                                "DELETE FROM questions WHERE quiz_id=?",
+                                (q["id"],)
+                            )
+                            conn.execute(
+                                "DELETE FROM quizzes WHERE id=?",
+                                (q["id"],)
+                            )
+                        st.rerun()
 
-                    st.success("Quiz status updated!")
-                    st.rerun()
+    with tab5:
+        st.subheader("Student Results")
 
-                if st.button(
-                    "Delete Quiz",
-                    key=f"delete_{q[0]}"
-                ):
-
-                    conn = connect()
-                    conn.execute(
-                        "DELETE FROM results WHERE quiz_id=?",
-                        (q[0],)
-                    )
-                    conn.execute(
-                        "DELETE FROM questions WHERE quiz_id=?",
-                        (q[0],)
-                    )
-                    conn.execute(
-                        "DELETE FROM quizzes WHERE id=?",
-                        (q[0],)
-                    )
-                    conn.commit()
-                    conn.close()
-
-                    st.success("Quiz deleted.")
-                    st.rerun()
-
-    # STUDENT RESULTS
-    elif menu == "Student Results":
-
-        st.title("📊 Student Examination Results")
-
-        conn = connect()
-
-        results = conn.execute("""
-        SELECT users.full_name, users.email, quizzes.title,
-        results.score, results.total, results.percentage,
-        results.submitted_at
-        FROM results
-        JOIN users ON results.user_id=users.id
-        JOIN quizzes ON results.quiz_id=quizzes.id
-        ORDER BY results.id DESC
-        """).fetchall()
-
-        conn.close()
+        with connect() as conn:
+            results = conn.execute("""
+            SELECT u.full_name, u.email, q.title,
+                   r.score, r.total, r.percentage, r.submitted_at
+            FROM results r
+            JOIN users u ON u.id=r.user_id
+            JOIN quizzes q ON q.id=r.quiz_id
+            ORDER BY r.id DESC
+            """).fetchall()
 
         if results:
-
-            df = pd.DataFrame(results, columns=[
-                "Student Name", "Email", "Quiz",
-                "Score", "Total", "Percentage", "Date"
-            ])
-
-            st.dataframe(df, use_container_width=True)
-
-            st.subheader("Score Analysis")
-            st.bar_chart(
-                df.set_index("Student Name")["percentage"]
+            st.dataframe(
+                pd.DataFrame([dict(r) for r in results]),
+                use_container_width=True
             )
-
         else:
-            st.info("No student results available.")
+            st.info("No student results yet.")
 
-    # STUDENT DETAILS
-    elif menu == "Student Details":
 
-        st.title("👨‍🎓 Registered Students")
+# ---------------- MAIN APP ----------------
 
-        conn = connect()
-        students = conn.execute("""
-        SELECT id,full_name,email
-        FROM users WHERE role='student'
-        ORDER BY id DESC
-        """).fetchall()
-        conn.close()
+if st.session_state.user is None:
+    login_page()
 
-        if students:
+elif st.session_state.quiz_attempt is not None:
+    take_quiz()
 
-            df = pd.DataFrame(
-                students,
-                columns=["Student ID", "Full Name", "Email"]
-            )
+elif st.session_state.user["role"] == "admin":
+    admin_dashboard()
 
-            st.dataframe(df, use_container_width=True)
+else:
+    student_dashboard()
 
-            st.metric("Registered Students", len(students))
-
-        else:
-            st.info("No students registered yet.")
-
-st.divider()
-st.caption("Online Quiz Portal | Python | Streamlit | SQLite")
 
